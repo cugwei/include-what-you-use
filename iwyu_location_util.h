@@ -95,12 +95,22 @@ inline string GetFilePath(const clang::FileEntry* file) {
 //------------------------------------------------------------
 // Helper functions for SourceLocation
 
+inline clang::SourceLocation GetSpellingLoc(clang::SourceLocation loc,
+                                            const clang::SourceManager& sm) {
+  return loc.isValid() ? sm.getSpellingLoc(loc) : loc;
+}
+
 inline clang::SourceLocation GetSpellingLoc(clang::SourceLocation loc) {
-  return loc.isValid() ? GlobalSourceManager()->getSpellingLoc(loc) : loc;
+  return GetSpellingLoc(loc, *GlobalSourceManager());
+}
+
+inline clang::SourceLocation GetInstantiationLoc(clang::SourceLocation loc,
+                                            const clang::SourceManager& sm) {
+  return loc.isValid() ? sm.getExpansionLoc(loc) : loc;
 }
 
 inline clang::SourceLocation GetInstantiationLoc(clang::SourceLocation loc) {
-  return loc.isValid() ? GlobalSourceManager()->getExpansionLoc(loc) : loc;
+  return GetInstantiationLoc(loc, *GlobalSourceManager());
 }
 
 inline bool IsInMacro(clang::SourceLocation loc) {
@@ -132,16 +142,20 @@ inline int GetLineNumber(clang::SourceLocation loc) {
 // Tells which #include loc comes from.
 // This is the most basic FileEntry getter, it only does a simple lookup in
 // SourceManager to determine which file the location is associated with.
-inline const clang::FileEntry* GetLocFileEntry(clang::SourceLocation loc) {
+inline const clang::FileEntry* GetLocFileEntry(clang::SourceLocation loc,
+                                               const clang::SourceManager& sm) {
   // clang uses the name FileID to mean 'a filename that was reached via
   // a particular series of #includes.'  (What one might think a FileID
   // might be -- a unique reference to a filesystem object -- is
   // actually a FileEntry*.)
-  const clang::SourceManager& source_manager = *GlobalSourceManager();
-  return source_manager.getFileEntryForID(source_manager.getFileID(loc));
+  return sm.getFileEntryForID(sm.getFileID(loc));
 }
 
-inline const clang::FileEntry* GetFileEntry(clang::SourceLocation loc) {
+inline const clang::FileEntry* GetLocFileEntry(clang::SourceLocation loc) {
+  return GetLocFileEntry(loc, *GlobalSourceManager());
+}
+
+inline const clang::FileEntry* GetFileEntry(clang::SourceLocation loc, const clang::SourceManager& sm) {
   if (!loc.isValid())
     return nullptr;
 
@@ -153,7 +167,7 @@ inline const clang::FileEntry* GetFileEntry(clang::SourceLocation loc) {
   //
   // FOO(z) will expand to 'z + y', where symbol z's location is
   // foo.h, line 5, and its spelling location is bar.cc, line 10.
-  const clang::FileEntry* retval = GetLocFileEntry(GetSpellingLoc(loc));
+  const clang::FileEntry* retval = GetLocFileEntry(GetSpellingLoc(loc, sm), sm);
 
   // Sometimes the spelling location is NULL, because the symbol is
   // 'spelled' via macro concatenation.  For instance, all the
@@ -161,11 +175,14 @@ inline const clang::FileEntry* GetFileEntry(clang::SourceLocation loc) {
   // /usr/include/c++/4.2/x86_64-linux-gnu/bits/gthr-default.h.
   // In that case, fall back on the instantiation location.
   if (!retval) {
-    retval = GetLocFileEntry(GetInstantiationLoc(loc));
+    retval = GetLocFileEntry(GetInstantiationLoc(loc, sm), sm);
   }
   return retval;
 }
 
+inline const clang::FileEntry* GetFileEntry(clang::SourceLocation loc) {
+  return GetFileEntry(loc, *GlobalSourceManager());
+}
 //------------------------------------------------------------
 // GetFileEntry(), GetFilePath(), and GetLocation().
 
@@ -185,6 +202,12 @@ clang::SourceLocation GetLocation(const clang::TemplateArgumentLoc* argloc);
 // These define default implementations of GetFileEntry() and
 // GetPath() in terms of GetLocation().  As long as an object defines
 // its own GetLocation(), it will get these other two for free.
+template<typename T> const clang::FileEntry* GetFileEntry(const T& obj, const clang::SourceManager& sm) {
+  return GetFileEntry(GetLocation(obj), sm);
+}
+template<typename T> const string GetFilePath(const T& obj, const clang::SourceManager& sm) {
+  return GetFilePath(GetFileEntry(obj, sm));
+}
 template<typename T> const clang::FileEntry* GetFileEntry(const T& obj) {
   return GetFileEntry(GetLocation(obj));
 }

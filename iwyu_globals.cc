@@ -334,6 +334,33 @@ void InitGlobals(clang::SourceManager* sm, clang::HeaderSearch* header_search) {
   }
 }
 
+void IncludeMap::include(clang::SourceLocation loc, const clang::FileEntry* entry) {
+  const clang::FileEntry* includer = GetFileEntry(loc);
+  includes_[includer][entry].insert(loc);
+  VERRS(6)
+    << "Include: "
+    << includer->getName()
+    << " -> "
+    << entry->getName()
+    << "\n";
+}
+
+void IncludeMap::module(clang::SourceLocation loc, const clang::Module* module) {
+  const clang::FileEntry* includer = GetFileEntry(loc);
+  modules_[includer][module].insert(loc);
+  VERRS(6)
+    << "Module: "
+    << includer->getName()
+    << " -> "
+    << module->getFullModuleName()
+    << "\n";
+}
+
+static IncludeMap map_ = {};
+IncludeMap& GlobalIncludeMap() {
+  return map_;
+}
+
 const CommandlineFlags& GlobalFlags() {
   CHECK_(commandline_flags && "Call ParseIwyuCommandlineFlags() before this");
   return *commandline_flags;
