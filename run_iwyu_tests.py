@@ -125,10 +125,15 @@ if __name__ == '__main__':
   group.add_argument('--list', dest='list_tests', action='store_true')
   group.add_argument('--list-test-files', action='store_true')
   group.add_argument('--run-test-file')
+  group.add_argument('--test-args')
   (runner_args, _) = parser.parse_known_args(unittest_args)
 
   if runner_args.run_test_file:
     exit(TestIwyuOnRelevantFiles(runner_args.run_test_file))
+
+  if runner_args.test_args:
+    print(iwyu_test_util._GetLaunchArguments(runner_args.test_args))
+    exit(0)
 
   @GenerateTests(rootdir='tests/c', pattern='*.c')
   class c(unittest.TestCase): pass
