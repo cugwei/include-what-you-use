@@ -17,8 +17,10 @@
 #include "clang/Basic/SourceManager.h"
 #include "clang/Lex/Token.h"
 
+using clang::CharSourceRange;
 using clang::SourceLocation;
 using clang::SourceManager;
+using clang::SourceRange;
 using clang::Token;
 using llvm::StringRef;
 using std::string;
@@ -64,6 +66,26 @@ SourceLocation GetLocationAfter(
   if (!needle_loc)
     return SourceLocation();   // invalid source location
   return start_loc.getLocWithOffset(needle_loc - data + needle.length());
+}
+
+SourceLocation GetLineBeginning(SourceLocation loc, const SourceManager& sm) {
+  clang::PresumedLoc ploc = sm.getPresumedLoc(loc, true);
+  if (ploc.isInvalid()) return SourceLocation();
+  return sm.translateLineCol(ploc.getFileID(), ploc.getLine(), 1);
+}
+
+SourceLocation GetLineEnding(SourceLocation loc, const SourceManager& sm) {
+  bool invalid = false;
+  const char* data = sm.getCharacterData(loc, &invalid);
+  if (invalid) return SourceLocation();
+  const char *line_end = strchr(data, '\n');
+  if (!line_end) return sm.getLocForEndOfFile(sm.getFileID(loc));
+  return loc.getLocWithOffset(line_end - data);
+}
+
+SourceRange GetLineRange(SourceLocation loc, const SourceManager& sm) {
+  SourceLocation B = GetLineBeginning(loc, sm);
+  return SourceRange(B, GetLineEnding(B, sm));
 }
 
 string GetIncludeNameAsWritten(

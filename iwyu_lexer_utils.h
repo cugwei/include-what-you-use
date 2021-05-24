@@ -60,6 +60,12 @@ clang::SourceLocation GetLocationAfter(
     clang::SourceLocation start_loc, const string& needle,
     const CharacterDataGetterInterface& data_getter);
 
+clang::SourceLocation GetLineBeginning(
+    clang::SourceLocation loc, const clang::SourceManager& sm);
+clang::SourceLocation GetLineEnding(clang::SourceLocation loc,
+                                    const clang::SourceManager& sm);
+clang::SourceRange GetLineRange(clang::SourceLocation loc,
+                                const clang::SourceManager& sm);
 // Returns the include-name as written, including <>'s and ""'s.
 // Resolved computed includes first, so given
 //    #define INC  <stdio.h>
