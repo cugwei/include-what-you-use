@@ -88,7 +88,6 @@ using clang::ObjCObjectType;
 using clang::ObjCObjectPointerType;
 using clang::ObjCInterfaceDecl;
 using clang::ObjCProtocolDecl;
-using clang::ObjCCategoryDecl;
 using clang::ObjCContainerDecl;
 using clang::OverloadExpr;
 using clang::PointerType;
