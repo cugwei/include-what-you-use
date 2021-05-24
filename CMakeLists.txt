@@ -201,3 +201,25 @@ if(PYTHONINTERP_FOUND)
     COMMAND ${PYTHON_EXECUTABLE} iwyu_tool_test.py
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 endif()
+
+add_llvm_library(iwyu-plugin SHARED
+  iwyu_plugin.cc
+  iwyu_ast_util.cc
+  iwyu_driver.cc
+  iwyu_globals.cc
+  iwyu_include_picker.cc
+  iwyu_lexer_utils.cc
+  iwyu_location_util.cc
+  iwyu_path_util.cc
+  iwyu_verrs.cc
+  )
+# Add a dependency on clang-resource-headers to ensure the builtin headers are
+# available when IWYU is executed from the build dir.
+add_dependencies(iwyu-plugin clang-resource-headers)
+
+# LLVM requires C++14, so follow suit.
+set_property(TARGET iwyu-plugin PROPERTY CXX_STANDARD_REQUIRED ON)
+set_property(TARGET iwyu-plugin PROPERTY CXX_STANDARD 14)
+set_property(TARGET iwyu-plugin PROPERTY CXX_EXTENSIONS OFF)
+target_link_libraries(iwyu-plugin PRIVATE clang-cpp)
+install(TARGETS iwyu-plugin RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

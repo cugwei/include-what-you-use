@@ -1,0 +1,9 @@
+#!/bin/bash
+
+PLUGIN="$HOME/projects/iwyu-build/libiwyu-plugin.so"
+FILE="$1"
+clang \
+	-fsyntax-only \
+	-Xclang -load -Xclang "$PLUGIN" -Xclang -plugin -Xclang IWYU \
+	$(./run_iwyu_tests.py --test-args "$FILE") \
+	"$FILE"
