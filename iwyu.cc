@@ -210,7 +210,7 @@ using clang::TypedefDecl;
 using clang::TypedefNameDecl;
 using clang::TypedefType;
 using clang::UnaryExprOrTypeTraitExpr;
-using clang::UsingDecl;
+using clang::BaseUsingDecl;
 using clang::UsingDirectiveDecl;
 using clang::UsingShadowDecl;
 using clang::ValueDecl;
@@ -1059,7 +1059,7 @@ struct VisitorState {
   // The key is the type being 'used', the FileEntry is the file
   // that has the using decl.  If there are multiple using decls
   // for a file, we prefer the one that has NamedDecl in it.
-  multimap<const NamedDecl*, const UsingDecl*> using_declarations;
+  multimap<const NamedDecl*, const BaseUsingDecl*> using_declarations;
 };
 
 // ----------------------------------------------------------------------
@@ -1534,7 +1534,7 @@ class IwyuBaseAstVisitor : public BaseAstVisitor<Derived> {
     // TODO(csilvers): maybe just insert our own using declaration
     // instead?  We can call it "Use what you use". :-)
     // TODO(csilvers): check for using statements and namespace aliases too.
-    if (const UsingDecl* using_decl
+    if (const BaseUsingDecl* using_decl
         = GetUsingDeclarationOf(used_decl,
               GetDeclContext(current_ast_node()))) {
       preprocessor_info().FileInfoFor(used_in)->ReportUsingDeclUse(
@@ -1593,7 +1593,7 @@ class IwyuBaseAstVisitor : public BaseAstVisitor<Derived> {
 
     // If we're a use that depends on a using declaration, make sure
     // we #include the file with the using declaration.
-    if (const UsingDecl* using_decl
+    if (const BaseUsingDecl* using_decl
         = GetUsingDeclarationOf(used_decl,
               GetDeclContext(current_ast_node()))) {
       preprocessor_info().FileInfoFor(used_in)->ReportUsingDeclUse(
@@ -2581,10 +2581,10 @@ class IwyuBaseAstVisitor : public BaseAstVisitor<Derived> {
     return visitor_state_->preprocessor_info;
   }
 
-  void AddShadowDeclarations(const UsingDecl* using_decl) {
+  void AddShadowDeclarations(const BaseUsingDecl* using_decl) {
     for (const UsingShadowDecl* shadow : using_decl->shadows()) {
       visitor_state_->using_declarations.insert(
-          make_pair(shadow->getTargetDecl(), shadow->getUsingDecl()));
+          make_pair(shadow->getTargetDecl(), shadow->getIntroducer()));
     }
   }
 
@@ -2599,12 +2599,12 @@ class IwyuBaseAstVisitor : public BaseAstVisitor<Derived> {
     visitor_state_->processed_overload_locs.insert(loc);
   }
 
-  const UsingDecl* GetUsingDeclarationOf(const NamedDecl* decl,
+  const BaseUsingDecl* GetUsingDeclarationOf(const NamedDecl* decl,
                                          const DeclContext* use_context) {
     // First, if we have a UsingShadowDecl, then we don't need to do anything
     // because we can just directly return the using decl from that.
     if (const UsingShadowDecl* shadow = DynCastFrom(decl))
-      return shadow->getUsingDecl();
+      return shadow->getIntroducer();
 
     // But, if we don't have a UsingShadowDecl, then we need to look through
     // all the using-decls of the given decl.  We limit them to ones that are
@@ -2612,10 +2612,10 @@ class IwyuBaseAstVisitor : public BaseAstVisitor<Derived> {
     // namespaces we're in), via the check through 'Encloses'. Of those, we
     // pick the one that's in the same file as decl, if possible, otherwise we
     // pick one arbitrarily.
-    const UsingDecl* retval = nullptr;
-    vector<const UsingDecl*> using_decls
+    const BaseUsingDecl* retval = nullptr;
+    vector<const BaseUsingDecl*> using_decls
         = FindInMultiMap(visitor_state_->using_declarations, decl);
-    for (const UsingDecl* using_decl : using_decls) {
+    for (const BaseUsingDecl* using_decl : using_decls) {
       if (!using_decl->getDeclContext()->Encloses(use_context))
         continue;
       if (GetFileEntry(decl) == GetFileEntry(using_decl) || // prefer same file
