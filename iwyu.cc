@@ -163,7 +163,6 @@ using clang::CallExpr;
 using clang::ClassTemplateDecl;
 using clang::ClassTemplateSpecializationDecl;
 using clang::CompilerInstance;
-using clang::ConstructorUsingShadowDecl;
 using clang::Decl;
 using clang::DeclContext;
 using clang::DeclRefExpr;
