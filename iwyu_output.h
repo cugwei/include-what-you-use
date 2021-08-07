@@ -31,6 +31,7 @@
 namespace clang {
 class FileEntry;
 class UsingDecl;
+class BaseUsingDecl;
 }  // namespace clang
 
 namespace include_what_you_use {
@@ -239,7 +240,7 @@ class IwyuFileInfo {
   // only for placement operator new in templates (see
   // IwyuBaseAstVisitor::VisitCXXNewExpr).
   void ReportFullSymbolUse(clang::SourceLocation use_loc,
-                           const string& dfn_filepath,
+                           const clang::FileEntry* dfn_file,
                            const string& symbol);
   // TODO(dsturtevant): Can we determine in_cxx_method_body? Do we care?
 
@@ -259,7 +260,7 @@ class IwyuFileInfo {
   // Called whenever a NamedDecl is accessed through a UsingDecl.
   // ie: using std::swap; swap(a, b);
   void ReportUsingDeclUse(clang::SourceLocation use_loc,
-                          const clang::UsingDecl* using_decl,
+                          const clang::BaseUsingDecl* using_decl,
                           UseFlags flags, const char* comment);
 
   // This is used when we see a // NOLINT comment, for instance.  It says
@@ -355,7 +356,7 @@ class IwyuFileInfo {
 
   // Maps all the using-decls that are reported to a bool indicating whether
   // or not a the using decl has been referenced in this file.
-  map<const clang::UsingDecl*, bool> using_decl_referenced_;
+  map<const clang::BaseUsingDecl*, bool> using_decl_referenced_;
 
   // We also hold the line information in a few other data structures,
   // for ease of references.

@@ -163,7 +163,6 @@ using clang::CallExpr;
 using clang::ClassTemplateDecl;
 using clang::ClassTemplateSpecializationDecl;
 using clang::CompilerInstance;
-using clang::ConstructorUsingShadowDecl;
 using clang::Decl;
 using clang::DeclContext;
 using clang::DeclRefExpr;
@@ -197,6 +196,7 @@ using clang::QualifiedTypeLoc;
 using clang::RecordDecl;
 using clang::RecursiveASTVisitor;
 using clang::ReferenceType;
+using clang::Sema;
 using clang::SourceLocation;
 using clang::Stmt;
 using clang::SubstTemplateTypeParmType;
@@ -215,7 +215,7 @@ using clang::TypedefDecl;
 using clang::TypedefNameDecl;
 using clang::TypedefType;
 using clang::UnaryExprOrTypeTraitExpr;
-using clang::UsingDecl;
+using clang::BaseUsingDecl;
 using clang::UsingDirectiveDecl;
 using clang::UsingShadowDecl;
 using clang::ValueDecl;
@@ -538,17 +538,10 @@ class BaseAstVisitor : public RecursiveASTVisitor<Derived> {
 
   //------------------------------------------------------------
   // (4) Add implicit text.
-
-  // When we see an object that has implicit text that iwyu
-  // wants to look at, we make callbacks as if that text had
-  // been explicitly written.  Here's text we consider:
   //
-  //    * CXXDestructorDecl: a destructor call for each non-POD field
-  //      in the dtor's class, and each base type of that class.
-  //    * CXXRecordDecl: a CXXConstructorDecl for each implicit
-  //      constructor (zero-arg and copy).  A CXXDestructor decl
-  //      if the destructor is implicit.  A CXXOperatorCallDecl if
-  //      operator= is explicit.
+  // This simulates a call to the destructor of every non-POD field and base
+  // class in all classes with destructors, to mark them as used by virtue of
+  // being class members.
   bool TraverseCXXDestructorDecl(clang::CXXDestructorDecl* decl) {
     if (!Base::TraverseCXXDestructorDecl(decl))  return false;
     if (CanIgnoreCurrentASTNode())  return true;
@@ -581,69 +574,12 @@ class BaseAstVisitor : public RecursiveASTVisitor<Derived> {
     return true;
   }
 
-  // clang lazily constructs the implicit methods of a C++ class (the
-  // default constructor and destructor, etc) -- it only bothers to
-  // create a CXXMethodDecl if someone actually calls these classes.
-  // But we need to be non-lazy: iwyu depends on analyzing what future
-  // code *may* call in a class, not what current code *does*.  So we
-  // force all the lazy evaluation to happen here.  This will
-  // (possibly) add a bunch of MethodDecls to the AST, as children of
-  // decl.  We're hoping it will always be safe to modify the AST
-  // while it's being traversed!
-  void InstantiateImplicitMethods(CXXRecordDecl* decl) {
-    if (decl->isDependentType())   // only instantiate if class is instantiated
-      return;
-
-    clang::Sema& sema = compiler_->getSema();
-    DeclContext::lookup_result ctors = sema.LookupConstructors(decl);
-    for (NamedDecl* ctor_lookup : ctors) {
-      // Ignore templated or inheriting constructors.
-      if (isa<FunctionTemplateDecl>(ctor_lookup) ||
-          isa<UsingDecl>(ctor_lookup) ||
-          isa<ConstructorUsingShadowDecl>(ctor_lookup))
-        continue;
-      CXXConstructorDecl* ctor = cast<CXXConstructorDecl>(ctor_lookup);
-      if (!ctor->hasBody() && !ctor->isDeleted() && ctor->isImplicit()) {
-        if (sema.getSpecialMember(ctor) == clang::Sema::CXXDefaultConstructor) {
-          sema.DefineImplicitDefaultConstructor(CurrentLoc(), ctor);
-        } else {
-          // TODO(nlewycky): enable this!
-          //sema.DefineImplicitCopyConstructor(CurrentLoc(), ctor);
-        }
-      }
-      // Unreferenced template constructors stay uninstantiated on purpose.
-    }
-
-    if (CXXDestructorDecl* dtor = sema.LookupDestructor(decl)) {
-      if (!dtor->isDeleted()) {
-        if (!dtor->hasBody() && dtor->isImplicit())
-          sema.DefineImplicitDestructor(CurrentLoc(), dtor);
-        if (!dtor->isDefined() && dtor->getTemplateInstantiationPattern())
-          sema.PendingInstantiations.emplace_back(dtor, CurrentLoc());
-      }
-    }
-
-    // TODO(nlewycky): copy assignment operator
-
-    // clang queues up method instantiations.  We need to process them now.
-    sema.PerformPendingInstantiations();
-  }
-
-  // Handle implicit methods that otherwise wouldn't be seen by RAV.
-  bool TraverseCXXRecordDecl(clang::CXXRecordDecl* decl) {
-    if (CanIgnoreCurrentASTNode()) return true;
-    // We only care about classes that are actually defined.
-    if (decl && decl->isThisDeclarationADefinition()) {
-      InstantiateImplicitMethods(decl);
-    }
-
-    return Base::TraverseCXXRecordDecl(decl);
-  }
-
+  // Class template specialization are similar to regular C++ classes,
+  // particularly they need the same custom handling of implicit destructors.
   bool TraverseClassTemplateSpecializationDecl(
       clang::ClassTemplateSpecializationDecl* decl) {
     if (!Base::TraverseClassTemplateSpecializationDecl(decl)) return false;
-    return TraverseCXXRecordDecl(decl);
+    return Base::TraverseCXXRecordDecl(decl);
   }
 
   //------------------------------------------------------------
@@ -1128,7 +1064,7 @@ struct VisitorState {
   // The key is the type being 'used', the FileEntry is the file
   // that has the using decl.  If there are multiple using decls
   // for a file, we prefer the one that has NamedDecl in it.
-  multimap<const NamedDecl*, const UsingDecl*> using_declarations;
+  multimap<const NamedDecl*, const BaseUsingDecl*> using_declarations;
 };
 
 // ----------------------------------------------------------------------
@@ -1161,6 +1097,7 @@ class IwyuBaseAstVisitor : public BaseAstVisitor<Derived> {
   using Base::CurrentFileEntry;
   using Base::PrintableCurrentLoc;
   using Base::current_ast_node;
+  using Base::compiler;
 
   enum class IgnoreKind {
     ForUse,
@@ -1602,7 +1539,7 @@ class IwyuBaseAstVisitor : public BaseAstVisitor<Derived> {
     // TODO(csilvers): maybe just insert our own using declaration
     // instead?  We can call it "Use what you use". :-)
     // TODO(csilvers): check for using statements and namespace aliases too.
-    if (const UsingDecl* using_decl
+    if (const BaseUsingDecl* using_decl
         = GetUsingDeclarationOf(used_decl,
               GetDeclContext(current_ast_node()))) {
       preprocessor_info().FileInfoFor(used_in)->ReportUsingDeclUse(
@@ -1661,7 +1598,7 @@ class IwyuBaseAstVisitor : public BaseAstVisitor<Derived> {
 
     // If we're a use that depends on a using declaration, make sure
     // we #include the file with the using declaration.
-    if (const UsingDecl* using_decl
+    if (const BaseUsingDecl* using_decl
         = GetUsingDeclarationOf(used_decl,
               GetDeclContext(current_ast_node()))) {
       preprocessor_info().FileInfoFor(used_in)->ReportUsingDeclUse(
@@ -2430,9 +2367,18 @@ class IwyuBaseAstVisitor : public BaseAstVisitor<Derived> {
         // parse it to '<new>' before using, so any path that does
         // that, and is clearly a c++ path, is fine; its exact
         // contents don't matter that much.
+        using clang::Optional;
+        using clang::DirectoryLookup;
+        using clang::FileEntryRef;
         const FileEntry* use_file = CurrentFileEntry();
-        preprocessor_info().FileInfoFor(use_file)->ReportFullSymbolUse(
-            CurrentLoc(), "<new>", "operator new");
+        const DirectoryLookup* curdir = nullptr;
+        Optional<FileEntryRef> file = compiler()->getPreprocessor().LookupFile(
+            CurrentLoc(), "new", true, nullptr, use_file, curdir, nullptr,
+            nullptr, nullptr, nullptr, nullptr, false);
+        if (file) {
+          preprocessor_info().FileInfoFor(use_file)->ReportFullSymbolUse(
+              CurrentLoc(), *file, "operator new");
+        }
       }
     }
 
@@ -2656,10 +2602,10 @@ class IwyuBaseAstVisitor : public BaseAstVisitor<Derived> {
     return visitor_state_->preprocessor_info;
   }
 
-  void AddShadowDeclarations(const UsingDecl* using_decl) {
+  void AddShadowDeclarations(const BaseUsingDecl* using_decl) {
     for (const UsingShadowDecl* shadow : using_decl->shadows()) {
       visitor_state_->using_declarations.insert(
-          make_pair(shadow->getTargetDecl(), shadow->getUsingDecl()));
+          make_pair(shadow->getTargetDecl(), shadow->getIntroducer()));
     }
   }
 
@@ -2674,12 +2620,12 @@ class IwyuBaseAstVisitor : public BaseAstVisitor<Derived> {
     visitor_state_->processed_overload_locs.insert(loc);
   }
 
-  const UsingDecl* GetUsingDeclarationOf(const NamedDecl* decl,
+  const BaseUsingDecl* GetUsingDeclarationOf(const NamedDecl* decl,
                                          const DeclContext* use_context) {
     // First, if we have a UsingShadowDecl, then we don't need to do anything
     // because we can just directly return the using decl from that.
     if (const UsingShadowDecl* shadow = DynCastFrom(decl))
-      return shadow->getUsingDecl();
+      return shadow->getIntroducer();
 
     // But, if we don't have a UsingShadowDecl, then we need to look through
     // all the using-decls of the given decl.  We limit them to ones that are
@@ -2687,10 +2633,10 @@ class IwyuBaseAstVisitor : public BaseAstVisitor<Derived> {
     // namespaces we're in), via the check through 'Encloses'. Of those, we
     // pick the one that's in the same file as decl, if possible, otherwise we
     // pick one arbitrarily.
-    const UsingDecl* retval = nullptr;
-    vector<const UsingDecl*> using_decls
+    const BaseUsingDecl* retval = nullptr;
+    vector<const BaseUsingDecl*> using_decls
         = FindInMultiMap(visitor_state_->using_declarations, decl);
-    for (const UsingDecl* using_decl : using_decls) {
+    for (const BaseUsingDecl* using_decl : using_decls) {
       if (!using_decl->getDeclContext()->Encloses(use_context))
         continue;
       if (GetFileEntry(decl) == GetFileEntry(using_decl) || // prefer same file
@@ -3669,11 +3615,31 @@ class IwyuAstConsumer
     const_cast<IwyuPreprocessorInfo*>(&preprocessor_info())->
         HandlePreprocessingDone();
 
+    TranslationUnitDecl* tu_decl = context.getTranslationUnitDecl();
+
+    // Sema::TUScope is reset after parsing, but Sema::getCurScope still points
+    // to the translation unit decl scope. TUScope is required for lookup in
+    // some complex scenarios, so re-wire it before running IWYU AST passes.
+    // Assert their expected state so we notice if these assumptions change.
+    Sema& sema = compiler()->getSema();
+    CHECK_(sema.TUScope == nullptr);
+    CHECK_(sema.getCurScope() != nullptr);
+    sema.TUScope = sema.getCurScope();
+
     // We run a separate pass to force parsing of late-parsed function
     // templates.
-    ParseFunctionTemplates(context.getTranslationUnitDecl());
+    ParseFunctionTemplates(sema, tu_decl);
 
-    TraverseDecl(context.getTranslationUnitDecl());
+    // Clang lazily constructs the implicit methods of a C++ class (the
+    // default constructor and destructor, etc) -- it only bothers to
+    // create a CXXMethodDecl if someone actually calls these classes.
+    // But we need to be non-lazy: IWYU depends on analyzing what future
+    // code *may* call in a class, not what current code *does*.  So we
+    // force all the lazy evaluation to happen here.
+    InstantiateImplicitMethods(sema, tu_decl);
+
+    // Run IWYU analysis.
+    TraverseDecl(tu_decl);
 
     // Check if any unrecoverable errors have occurred.
     // There is no point in continuing when the AST is in a bad state.
@@ -3718,9 +3684,8 @@ class IwyuAstConsumer
     exit(EXIT_SUCCESS_OFFSET + num_edits);
   }
 
-  void ParseFunctionTemplates(TranslationUnitDecl* decl) {
-    set<FunctionDecl*> late_parsed_decls = GetLateParsedFunctionDecls(decl);
-    clang::Sema& sema = compiler()->getSema();
+  void ParseFunctionTemplates(Sema& sema, TranslationUnitDecl* tu_decl) {
+    set<FunctionDecl*> late_parsed_decls = GetLateParsedFunctionDecls(tu_decl);
 
     // If we have any late-parsed functions, make sure the
     // -fdelayed-template-parsing flag is on. Otherwise we don't know where
@@ -3741,6 +3706,55 @@ class IwyuAstConsumer
       clang::LateParsedTemplate* lpt = sema.LateParsedTemplateMap[fd].get();
       sema.LateTemplateParser(sema.OpaqueParser, *lpt);
     }
+  }
+
+  void InstantiateImplicitMethods(Sema& sema, TranslationUnitDecl* tu_decl) {
+    // Collect all implicit ctors/dtors that need to be instantiated.
+    struct Visitor : public RecursiveASTVisitor<Visitor> {
+      Visitor(Sema& sema) : sema(sema) {
+      }
+
+      bool VisitCXXRecordDecl(CXXRecordDecl* decl) {
+        if (CanIgnoreLocation(GetLocation(decl)))
+          return true;
+
+        if (!decl->getDefinition() || decl->isDependentContext() ||
+            decl->isBeingDefined()) {
+          return true;
+        }
+
+        if (CXXConstructorDecl* ctor = sema.LookupDefaultConstructor(decl)) {
+          may_need_definition.insert(ctor);
+        } else if (CXXDestructorDecl* dtor = sema.LookupDestructor(decl)) {
+          may_need_definition.insert(dtor);
+        }
+
+        return true;
+      }
+
+      Sema& sema;
+      std::set<CXXMethodDecl*> may_need_definition;
+    };
+
+    // Run visitor to collect implicit methods.
+    Visitor v(sema);
+    v.TraverseDecl(tu_decl);
+
+    // For each method collected, let Sema define them.
+    for (CXXMethodDecl* method : v.may_need_definition) {
+      if (!method->isDefaulted() || method->isDeleted() || method->hasBody())
+        continue;
+
+      SourceLocation loc = GetLocation(method->getParent());
+      if (auto* ctor = dyn_cast<CXXConstructorDecl>(method)) {
+        sema.DefineImplicitDefaultConstructor(loc, ctor);
+      } else if (auto* dtor = dyn_cast<CXXDestructorDecl>(method)) {
+        sema.DefineImplicitDestructor(loc, dtor);
+      }
+    }
+
+    // Clang queues up method instantiations. Process them now.
+    sema.PerformPendingInstantiations();
   }
 
   //------------------------------------------------------------

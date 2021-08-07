@@ -59,6 +59,7 @@ using clang::SourceLocation;
 using clang::SourceRange;
 using clang::TemplateDecl;
 using clang::UsingDecl;
+using clang::BaseUsingDecl;
 using llvm::cast;
 using llvm::dyn_cast;
 using llvm::errs;
@@ -324,9 +325,9 @@ void OneUse::SetPublicHeaders() {
       symbol_name_, use_path);
   if (public_headers_.empty())
     public_headers_ = picker.GetCandidateHeadersForFilepathIncludedFrom(
-        decl_filepath_, use_path);
+        decl_filepath(), use_path);
   if (public_headers_.empty())
-    public_headers_.push_back(ConvertToQuotedInclude(decl_filepath_));
+    public_headers_.push_back(ConvertToQuotedInclude(decl_filepath()));
 }
 
 const vector<string>& OneUse::public_headers() {
@@ -663,9 +664,10 @@ void IwyuFileInfo::ReportFullSymbolUse(SourceLocation use_loc,
 }
 
 void IwyuFileInfo::ReportFullSymbolUse(SourceLocation use_loc,
-                                       const string& dfn_filepath,
+                                       const FileEntry* dfn_file,
                                        const string& symbol) {
-  symbol_uses_.push_back(OneUse(symbol, nullptr, dfn_filepath, use_loc));
+  symbol_uses_.push_back(OneUse(symbol, dfn_file, 
+                                GetFilePath(dfn_file), use_loc));
   LogSymbolUse("Marked full-info use of symbol", symbol_uses_.back());
 }
 
@@ -708,7 +710,7 @@ void IwyuFileInfo::ReportForwardDeclareUse(SourceLocation use_loc,
 }
 
 void IwyuFileInfo::ReportUsingDeclUse(SourceLocation use_loc,
-                                      const UsingDecl* using_decl,
+                                      const BaseUsingDecl* using_decl,
                                       UseFlags flags,
                                       const char* comment) {
   // If accessing a symbol through a using decl in the same file that contains
@@ -1211,7 +1213,7 @@ void ProcessFullUse(OneUse* use,
   // We normally ignore uses for builtins, but when there is a mapping defined
   // for the symbol, we should respect that.  So, we need to determine whether
   // the symbol has any mappings.
-  bool is_builtin_function = IsBuiltinFunction(use->decl(), use->symbol_name());
+  bool is_builtin_function = IsBuiltinFunction(use->decl());
 
   bool is_builtin_function_with_mappings =
       is_builtin_function && HasMapping(use->symbol_name());
@@ -2186,15 +2188,15 @@ void IwyuFileInfo::ResolvePendingAnalysis() {
   // thorough approach would be to scan the current list of includes that
   // already name this decl (like in the overloaded function case) and include
   // one of those so we don't include a file we don't actually need.
-  for (map<const UsingDecl*, bool>::value_type using_decl_status
+  for (map<const BaseUsingDecl*, bool>::value_type using_decl_status
       : using_decl_referenced_) {
     if (!using_decl_status.second) {
       // There are valid cases where there is no shadow decl, e.g. if a derived
       // class has a using declaration for a member, but also hides it.
       // Only report the target if we have a shadow decl.
-      const UsingDecl* using_decl = using_decl_status.first;
+      const BaseUsingDecl* using_decl = using_decl_status.first;
       if (using_decl->shadow_size() > 0) {
-        ReportForwardDeclareUse(using_decl->getUsingLoc(),
+        ReportForwardDeclareUse(using_decl->getLocation(),
                                 using_decl->shadow_begin()->getTargetDecl(),
                                 /* flags */ UF_None,
                                 "(for un-referenced using)");
