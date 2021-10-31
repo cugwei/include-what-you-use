@@ -166,6 +166,7 @@ using clang::CompilerInstance;
 using clang::Decl;
 using clang::DeclContext;
 using clang::DeclRefExpr;
+using clang::DeducedTemplateSpecializationType;
 using clang::EnumType;
 using clang::Expr;
 using clang::FileEntry;
@@ -215,7 +216,7 @@ using clang::TypedefDecl;
 using clang::TypedefNameDecl;
 using clang::TypedefType;
 using clang::UnaryExprOrTypeTraitExpr;
-using clang::BaseUsingDecl;
+using clang::UsingDecl;
 using clang::UsingDirectiveDecl;
 using clang::UsingShadowDecl;
 using clang::ValueDecl;
@@ -1064,7 +1065,7 @@ struct VisitorState {
   // The key is the type being 'used', the FileEntry is the file
   // that has the using decl.  If there are multiple using decls
   // for a file, we prefer the one that has NamedDecl in it.
-  multimap<const NamedDecl*, const BaseUsingDecl*> using_declarations;
+  multimap<const NamedDecl*, const UsingDecl*> using_declarations;
 };
 
 // ----------------------------------------------------------------------
@@ -1264,7 +1265,26 @@ class IwyuBaseAstVisitor : public BaseAstVisitor<Derived> {
     for (const NamedDecl* redecl : GetClassRedecls(decl)) {
       if (GetFileEntry(redecl) == macro_def_file && IsForwardDecl(redecl)) {
         fwd_decl = redecl;
+        break;
+      }
+    }
 
+    if (!fwd_decl) {
+      if (const auto* func_decl = dyn_cast<FunctionDecl>(decl)) {
+        if (const FunctionTemplateDecl* ft_decl =
+            func_decl->getPrimaryTemplate()) {
+          VERRS(5) << "No fwd-decl found, looking for function template decl\n";
+          for (const NamedDecl* redecl : ft_decl->redecls()) {
+            if (GetFileEntry(redecl) == macro_def_file) {
+              fwd_decl = redecl;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    if (fwd_decl) {
         // Make sure we keep that forward-declaration, even if it's probably
         // unused in this file.
         IwyuFileInfo* file_info =
@@ -1272,8 +1292,6 @@ class IwyuBaseAstVisitor : public BaseAstVisitor<Derived> {
         file_info->ReportForwardDeclareUse(
             spelling_loc, fwd_decl,
             ComputeUseFlags(current_ast_node()), nullptr);
-        break;
-      }
     }
 
     // Resolve the best use location based on our current knowledge.
@@ -1539,7 +1557,7 @@ class IwyuBaseAstVisitor : public BaseAstVisitor<Derived> {
     // TODO(csilvers): maybe just insert our own using declaration
     // instead?  We can call it "Use what you use". :-)
     // TODO(csilvers): check for using statements and namespace aliases too.
-    if (const BaseUsingDecl* using_decl
+    if (const UsingDecl* using_decl
         = GetUsingDeclarationOf(used_decl,
               GetDeclContext(current_ast_node()))) {
       preprocessor_info().FileInfoFor(used_in)->ReportUsingDeclUse(
@@ -1598,7 +1616,7 @@ class IwyuBaseAstVisitor : public BaseAstVisitor<Derived> {
 
     // If we're a use that depends on a using declaration, make sure
     // we #include the file with the using declaration.
-    if (const BaseUsingDecl* using_decl
+    if (const UsingDecl* using_decl
         = GetUsingDeclarationOf(used_decl,
               GetDeclContext(current_ast_node()))) {
       preprocessor_info().FileInfoFor(used_in)->ReportUsingDeclUse(
@@ -2601,10 +2619,13 @@ class IwyuBaseAstVisitor : public BaseAstVisitor<Derived> {
     return visitor_state_->preprocessor_info;
   }
 
-  void AddShadowDeclarations(const BaseUsingDecl* using_decl) {
+  void AddShadowDeclarations(const UsingDecl* using_decl) {
     for (const UsingShadowDecl* shadow : using_decl->shadows()) {
-      visitor_state_->using_declarations.insert(
-          make_pair(shadow->getTargetDecl(), shadow->getIntroducer()));
+      if (const auto* introducer =
+              dyn_cast<UsingDecl>(shadow->getUsingDecl())) {
+        visitor_state_->using_declarations.insert(
+            make_pair(shadow->getTargetDecl(), introducer));
+      }
     }
   }
 
@@ -2619,12 +2640,13 @@ class IwyuBaseAstVisitor : public BaseAstVisitor<Derived> {
     visitor_state_->processed_overload_locs.insert(loc);
   }
 
-  const BaseUsingDecl* GetUsingDeclarationOf(const NamedDecl* decl,
+  const UsingDecl* GetUsingDeclarationOf(const NamedDecl* decl,
                                          const DeclContext* use_context) {
     // First, if we have a UsingShadowDecl, then we don't need to do anything
     // because we can just directly return the using decl from that.
-    if (const UsingShadowDecl* shadow = DynCastFrom(decl))
-      return shadow->getIntroducer();
+    if (const auto* shadow = dyn_cast<UsingShadowDecl>(decl)) {
+      return dyn_cast<UsingDecl>(shadow->getUsingDecl());
+    }
 
     // But, if we don't have a UsingShadowDecl, then we need to look through
     // all the using-decls of the given decl.  We limit them to ones that are
@@ -2632,10 +2654,10 @@ class IwyuBaseAstVisitor : public BaseAstVisitor<Derived> {
     // namespaces we're in), via the check through 'Encloses'. Of those, we
     // pick the one that's in the same file as decl, if possible, otherwise we
     // pick one arbitrarily.
-    const BaseUsingDecl* retval = nullptr;
-    vector<const BaseUsingDecl*> using_decls
+    const UsingDecl* retval = nullptr;
+    vector<const UsingDecl*> using_decls
         = FindInMultiMap(visitor_state_->using_declarations, decl);
-    for (const BaseUsingDecl* using_decl : using_decls) {
+    for (const UsingDecl* using_decl : using_decls) {
       if (!using_decl->getDeclContext()->Encloses(use_context))
         continue;
       if (GetFileEntry(decl) == GetFileEntry(using_decl) || // prefer same file
@@ -4176,18 +4198,21 @@ class IwyuAstConsumer
   bool VisitTemplateName(TemplateName template_name) {
     if (CanIgnoreCurrentASTNode())  return true;
     if (!Base::VisitTemplateName(template_name))  return false;
-    // The only time we can see a TemplateName not in the
-    // context of a TemplateSpecializationType is when it's
-    // the default argument of a template template arg:
+    // We can see TemplateName not in the context of aTemplateSpecializationType
+    // when it's either the default argument of a template template arg:
     //    template<template<class T> class A = TplNameWithoutTST> class Foo ...
-    // So that's the only case we need to handle here.
+    // or a deduced template specialization:
+    //    std::pair x(10, 20); // type of x is really std::pair<int, int>
+    // So that's the only cases we need to handle here.
     // TODO(csilvers): check if this is really forward-declarable or
     // not.  You *could* do something like: 'template<template<class
     // T> class A = Foo> class C { A<int>* x; };' and never
     // dereference x, but that's pretty unlikely.  So for now, we just
     // assume these default template template args always need full
     // type info.
-    if (IsDefaultTemplateTemplateArg(current_ast_node())) {
+    const ASTNode* ast_node = current_ast_node();
+    if (ast_node->ParentIsA<DeducedTemplateSpecializationType>() ||
+        IsDefaultTemplateTemplateArg(ast_node)) {
       current_ast_node()->set_in_forward_declare_context(false);
       ReportDeclUse(CurrentLoc(), template_name.getAsTemplateDecl());
     }
@@ -4253,7 +4278,6 @@ class IwyuAction : public ASTFrontendAction {
 
 #include "iwyu_driver.h"
 #include "clang/Frontend/FrontendAction.h"
-#include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/TargetSelect.h"
 
 using include_what_you_use::OptionsParser;
@@ -4261,12 +4285,11 @@ using include_what_you_use::IwyuAction;
 using include_what_you_use::CreateCompilerInstance;
 
 int main(int argc, char **argv) {
-  // Must initialize X86 target to be able to parse Microsoft inline
-  // assembly. We do this unconditionally, because it allows an IWYU
-  // built for non-X86 targets to parse MS inline asm without choking.
-  LLVMInitializeX86TargetInfo();
-  LLVMInitializeX86TargetMC();
-  LLVMInitializeX86AsmParser();
+  // X86 target is required to parse Microsoft inline assembly, so we hope it's
+  // part of all targets. Clang parser will complain otherwise.
+  llvm::InitializeAllTargetInfos();
+  llvm::InitializeAllTargetMCs();
+  llvm::InitializeAllAsmParsers();
 
   // The command line should look like
   //   path/to/iwyu -Xiwyu --verbose=4 [-Xiwyu --other_iwyu_flag]... CLANG_FLAGS... foo.cc

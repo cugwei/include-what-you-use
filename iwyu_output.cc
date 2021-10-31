@@ -59,7 +59,7 @@ using clang::SourceLocation;
 using clang::SourceRange;
 using clang::TemplateDecl;
 using clang::UsingDecl;
-using clang::BaseUsingDecl;
+using clang::UsingDecl;
 using llvm::cast;
 using llvm::dyn_cast;
 using llvm::errs;
@@ -710,7 +710,7 @@ void IwyuFileInfo::ReportForwardDeclareUse(SourceLocation use_loc,
 }
 
 void IwyuFileInfo::ReportUsingDeclUse(SourceLocation use_loc,
-                                      const BaseUsingDecl* using_decl,
+                                      const UsingDecl* using_decl,
                                       UseFlags flags,
                                       const char* comment) {
   // If accessing a symbol through a using decl in the same file that contains
@@ -2188,13 +2188,13 @@ void IwyuFileInfo::ResolvePendingAnalysis() {
   // thorough approach would be to scan the current list of includes that
   // already name this decl (like in the overloaded function case) and include
   // one of those so we don't include a file we don't actually need.
-  for (map<const BaseUsingDecl*, bool>::value_type using_decl_status
+  for (map<const UsingDecl*, bool>::value_type using_decl_status
       : using_decl_referenced_) {
     if (!using_decl_status.second) {
       // There are valid cases where there is no shadow decl, e.g. if a derived
       // class has a using declaration for a member, but also hides it.
       // Only report the target if we have a shadow decl.
-      const BaseUsingDecl* using_decl = using_decl_status.first;
+      const UsingDecl* using_decl = using_decl_status.first;
       if (using_decl->shadow_size() > 0) {
         ReportForwardDeclareUse(using_decl->getLocation(),
                                 using_decl->shadow_begin()->getTargetDecl(),
